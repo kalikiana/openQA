@@ -3,7 +3,6 @@ set -e
 : ${dbname:="openqa"}
 : ${dbuser:="geekotest"}
 
-
 # add extra repos for leap
 source /etc/os-release
 if [[ "$NAME" == "openSUSE Leap" ]] ; then
@@ -19,8 +18,14 @@ zypper -n install --no-recommends openQA-local-db apache2 openQA-worker qemu-kvm
 
 # setup database
 systemctl enable --now postgresql
-getent passwd $dbuser || su postgres -c "createuser -D $dbuser"
-su postgres -c "psql -lqt" | cut -d \| -f 1 | grep -qw $dbname || su postgres -c "createdb -O $dbuser $dbname"
+# \du list all users
+if ! su postgres -c "psql -c '\du;'" | grep $dbuser ; then
+	su postgres -c "createuser -D $dbuser"
+fi
+# -l list all tables -q quietly -t terminal-friendly
+if ! su postgres -c "psql -lqt" | grep $dbname ; then
+	su postgres -c "createdb -O $dbuser $dbname"
+fi
 
 
 # setup webserver and fake-auth
