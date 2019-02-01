@@ -16,6 +16,8 @@
 
 package OpenQA::WebAPI::Controller::API::V1::JobTemplate;
 use Mojo::Base 'Mojolicious::Controller';
+use YAML::XS;
+use JSON::Validator;
 
 =pod
 
@@ -115,6 +117,97 @@ sub list {
     } @templates;
 
     $self->render(json => {JobTemplates => \@templates});
+}
+
+sub schedules {
+    my $self = shift;
+
+    my @templates;
+
+    eval {
+        if (my $id = $self->param('job_template_id')) {
+            @templates = $self->db->resultset("JobTemplates")->search({id => $id});
+        }
+
+        else {
+
+            my %cond;
+            if (my $value = $self->param('machine_name'))    { $cond{'machine.name'}    = $value }
+            if (my $value = $self->param('test_suite_name')) { $cond{'test_suite.name'} = $value }
+            for my $id (qw(arch distri flavor version)) {
+                if (my $value = $self->param($id)) { $cond{"product.$id"} = $value }
+            }
+
+            my $has_query = grep { $cond{$_} } (
+                qw(machine_name test_suite.name product.arch)
+            );
+
+            if ($has_query) {
+                my $attrs
+                  = {join => ['machine', 'test_suite', 'product'], prefetch => [qw(machine test_suite product)]};
+                @templates = $self->db->resultset("JobTemplates")->search(\%cond, $attrs);
+            }
+            else {
+                @templates
+                  = $self->db->resultset("JobTemplates")->search({}, {prefetch => [qw(machine test_suite product)]});
+            }
+        }
+    };
+
+    if (my $error = $@) { return $self->render(json => {error => $error}, status => 404) }
+
+    @templates = map {
+        {
+            $_->group->name => {
+                distri  => $_->product->distri,
+                flavor  => $_->product->flavor,
+                version => $_->product->version,
+                $_->product->arch => [
+                    { $_->test_suite->name => {
+                        prio => $_->prio
+                    } }
+                ]
+            }
+        }
+    } @templates;
+
+    # No objects (aka SafeYAML)
+    $YAML::XS::LoadBlessed = 0;
+    # Real booleans as used by JSON::Validator
+    local $YAML::XS::Boolean = "JSON::PP";
+    my %yaml;
+    $yaml{jobs} = \@templates;
+
+    # Note: Using the schema filename; slurp'ed text isn't detected as YAML
+    my $schema_yaml = $self->app->home->child('assets', 'job.yaml')->to_string;
+    my $validator = JSON::Validator->new;
+    my $schema;
+    my @errors;
+    if ($ENV{MOJO_LOG_LEVEL} // '' =~ /DEBUG/i) {
+      # Validate the schema: catches errors in type names and definitions
+      $validator = $validator->load_and_validate_schema($schema_yaml);
+      $schema = $validator->schema;
+    }
+    else {
+      $schema = $validator->schema($schema_yaml);
+    }
+    # Note: Sanity-check the schema here because JSON::Validator may fail silently even with validation in debug mode
+    push @errors, "Schema is incomplete"
+      unless ($schema->get('/properties') && $schema->get('/required') && $schema->get('/type'));
+    if ($schema) {
+        # Note: Don't pass $schema here, that won't work
+        push @errors, $validator->validate(\%yaml);
+        push @errors, \%yaml if @errors;
+    }
+    else {
+        push @errors, "Failed to load schema";
+    }
+    if (@errors) {
+        $self->render(json => {error => \@errors}, status => 400);
+    }
+    else {
+        $self->render(data => YAML::XS::Dump(\%yaml), format => 'yaml');
+    }
 }
 
 =over 4

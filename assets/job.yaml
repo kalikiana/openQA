@@ -1,0 +1,46 @@
+$id: http://open.qa/api/jobs/schema
+$schema: http://json-schema.org/draft-04/schema#
+description: openQA job template
+type: object
+properties:
+  jobs:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      patternProperties:
+        "^.*$":
+          type: object
+          description: The name of a job group
+          required:
+            - distri
+            - flavor
+            - version
+          properties:
+            distri:
+              type: string
+            flavor:
+              type: string
+            version:
+              type: string
+          additionalProperties: false
+          patternProperties:
+            "^(?!(distri|flavor|version))[a-z0-9_]+$":
+              description: The architecture of the test suite(s) eg. ppc64le
+              type: array
+              uniqueItems: true
+              items:
+                type: object
+                additionalProperties: false
+                patternProperties:
+                  "^[A-Za-z0-9_+]+$":
+                    description: A test suite
+                    type: object
+                    required:
+                      - prio
+                    additionalProperties: false
+                    properties:
+                      prio:
+                        type: number
+required:
+  - jobs
