@@ -91,7 +91,7 @@
             </select>
 
         </div>
-        <form action="#" id="editor-form" class="form-horizontal" style="display: none;" onsubmit="return submitTemplateEditor();"
+        <form action="#" id="editor-form" class="form-horizontal" style="display: none;"
           data-put-url="<%= url_for('apiv1_job_templates_schedules' => (id => $group->id)) %>">
             <div class="form-group row">
                 <label for="editor-template" class="col-sm-4 control-label" data-toggle="tooltip" title="Changes in the YAML will be reflected in the database">
@@ -140,7 +140,10 @@ architectures:
                 <div class="col-sm-8">
                     <p class="buttons">
                     % if (is_admin) {
-                    <button id="update-template" type="submit" class="btn btn-primary"><i class="fas fa-update"></i>Preview changes</button>
+                    <button id="apply-template" type="button" onclick="return submitTemplateEditor(0);" class="btn btn-primary"><i class="fas fa-apply"></i>Apply changes</button>
+                    % }
+                    % if (is_admin) {
+                    <button id="preview-template" type="button" onclick="return submitTemplateEditor(1);" class="btn btn-default"><i class="fas fa-preview"></i>Preview changes</button>
                     % }
                     </p>
                     <p class="progress-indication">

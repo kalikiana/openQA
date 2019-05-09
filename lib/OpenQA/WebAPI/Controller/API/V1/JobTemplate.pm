@@ -18,6 +18,7 @@ package OpenQA::WebAPI::Controller::API::V1::JobTemplate;
 use Mojo::Base 'Mojolicious::Controller';
 use Try::Tiny;
 use JSON::Validator;
+use OpenQA::Git;
 
 =pod
 
@@ -338,9 +339,31 @@ sub update {
                         })->delete();
 
                     # Preview mode: Get the expected YAML and rollback the result
-                    if ($self->param('preview')) {
+                    if ($self->param('preview') // 0 == 1) {
                         $json->{template} = YAML::XS::Dump($self->get_job_groups($json->{id}));
                         $self->schema->txn_rollback;
+                    }
+                    # Commit changes to version control
+                    else {
+                        my $git = OpenQA::Git->new({
+                            app => $self->app,
+                            dir => $OpenQA::Utils::yamldir
+                        });
+                        if ($git->enabled) {
+                            $git->user($self->schema->resultset('Users')->find($self->current_user->id));
+                            my $error = $git->set_to_latest_master;
+                            die "$error\n" if $error;
+                            if (($git->config->{templates}->{push} || '') eq 'yes') {
+                                my $error = $git->commit({
+                                    message => sprintf("Template for group %s (%s) updated", $group, $group_id),
+                                });
+                                die "$error\n" if $error;
+                            }
+                        }
+                        if (!$ENV{NOT_HEADLESS}) {
+                            $json->{template} = YAML::XS::Dump($git->config);
+                            $self->schema->txn_rollback; # XXX
+                        }
                     }
                 });
         }

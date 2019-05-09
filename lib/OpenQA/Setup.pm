@@ -145,6 +145,11 @@ sub read_config {
             update_remote => '',
             update_branch => '',
             do_push       => 'no',
+            templates => {
+                remote => '',
+                branch => '',
+                push => 'no',
+            },
         },
         logging => {
             level     => undef,

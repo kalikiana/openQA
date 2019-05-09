@@ -397,7 +397,7 @@ function prepareTemplateEditor(data) {
     form.find('.buttons').show ();
 }
 
-function submitTemplateEditor() {
+function submitTemplateEditor(preview) {
     var form = $('#editor-form');
     form.find('.buttons').hide();
     form.find('.progress-indication').show();
@@ -408,7 +408,7 @@ function submitTemplateEditor() {
         type: 'POST',
         dataType: 'json',
         data: {
-            preview: 1,
+            preview: preview,
             template: editor.doc.getValue(),
         }
     }).done(function(data) {

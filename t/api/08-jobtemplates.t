@@ -21,6 +21,7 @@ BEGIN {
 use Mojo::Base -strict;
 use FindBin;
 use lib "$FindBin::Bin/../lib";
+use Test::MockModule;
 use Test::More;
 use Test::Mojo;
 use Test::Warnings;
@@ -788,6 +789,64 @@ subtest 'Create and modify groups with YAML' => sub {
         $t->get_ok("/api/v1/experimental/job_templates_scheduling/$job_group_id3");
         is_deeply(YAML::XS::Load($t->tx->res->body), $yaml, 'Unmodified group should not result in any changes')
           || diag explain $t->tx->res->body;
+    };
+
+    subtest 'Commit changes to git' => sub {
+        # setup mocking
+        my @executed_commands;
+        my $utils_mock        = Test::MockModule->new('OpenQA::Git');
+        my %mock_return_value = (
+            status => 1,
+            stderr => undef,
+        );
+        $utils_mock->mock(
+            run_cmd_with_log_return_error => sub {
+                my ($cmd) = @_;
+                push(@executed_commands, $cmd);
+                return \%mock_return_value;
+            });
+
+        $OpenQA::Utils::yamldir = '/repo/path';
+        my $git = OpenQA::Git->new({app => $t->app, dir => '/repo/path'});
+        $t->app->config->{global}->{scm} = 'git';
+        $t->post_ok(
+            '/api/v1/experimental/job_templates_scheduling',
+            form => {
+                template => YAML::XS::Dump($yaml)}
+        )->status_is(200)->json_is(
+            '' => {
+                id => $job_group_id3
+            },
+            'Git enabled without template configuration'
+        );
+        is_deeply(\@executed_commands, [], 'no commands executed')
+          or diag explain \@executed_commands;
+
+        $git->config->{templates} = {
+            push => 'yes',
+        };
+        $t->post_ok(
+            '/api/v1/experimental/job_templates_scheduling',
+            form => {
+                template => YAML::XS::Dump($yaml)}
+        )->status_is(200)->json_is(
+            '' => {
+                id => $job_group_id3
+            },
+            'Git enabled, template pushed'
+        );
+        my $message = 'Template for group foo (1005) updated';
+        is_deeply(\@executed_commands, [
+            [
+                qw(git -C /repo/path commit -q -m $message),
+                qw(git -C /repo/path push),
+            ],
+          ], 'push executed')
+          or diag explain \@executed_commands;
+
+        # Reset configuration
+        $t->app->config->{global}->{scm} = '';
+        $git->config->{templates} = {}
     };
 
     subtest 'Errors due to invalid properties' => sub {
