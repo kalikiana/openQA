@@ -89,7 +89,7 @@ $t->app->schema->resultset('Bugs')->find($bugid)->update(
     {
         t_created => time2str('%Y-%m-%d %H:%M:%S', time - 500, 'UTC'),
     });
-$t->get_ok('/api/v1/bugs?created_since=500');
+$t->get_ok('/api/v1/bugs?created_since=1000');
 is(scalar(keys %{$t->tx->res->json->{bugs}}), 3, 'All reported bugs');
 $t->get_ok('/api/v1/bugs?created_since=100');
 is(scalar(keys %{$t->tx->res->json->{bugs}}), 2, 'Only the latest bugs');
