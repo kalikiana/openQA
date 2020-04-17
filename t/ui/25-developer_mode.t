@@ -27,6 +27,7 @@ use lib "$FindBin::Bin/../lib";
 use Test::More;
 use Test::Mojo;
 use Test::Warnings;
+use Test::Output qw(stdout_like stderr_like);
 use Test::MockModule;
 use OpenQA::WebSockets::Client;
 use OpenQA::Test::Case;
@@ -149,7 +150,10 @@ like(
 );
 
 # navigate to live view of running test
-$driver->get('/tests/99961#live');
+stderr_like(sub {
+  $driver->get('/tests/99961#live');
+  is(js_variable('developerMode.currentApiFunction'),     'wait_serial', 'current API function set');
+}, qr/Asking the worker to /, 'Stream started');
 
 # mock some JavaScript functions
 mock_js_functions(
