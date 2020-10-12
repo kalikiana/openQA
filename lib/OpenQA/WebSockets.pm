@@ -1,4 +1,4 @@
-# Copyright (C) 2015 SUSE Linux GmbH
+# Copyright (C) 2014-2019 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -14,77 +14,115 @@
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 
 package OpenQA::WebSockets;
+use Mojo::Base 'Mojolicious';
 
-use strict;
-use warnings;
+use Mojo::Server::Daemon;
+use OpenQA::Setup;
+use OpenQA::Log qw(log_debug log_warning log_info setup_log);
+use OpenQA::WebSockets::Model::Status;
 
-use base 'Net::DBus::Object';
+our $RUNNING;
 
-use Net::DBus::Exporter 'org.opensuse.openqa.WebSockets';
-use Mojo::IOLoop;
-use OpenQA::IPC;
-use OpenQA::WebSockets::Server ();
-use OpenQA::Utils 'log_debug';
+sub startup {
+    my $self = shift;
 
-# monkey patching for debugging IPC
-sub _is_method_allowed {
-    my ($self, $method) = @_;
+    OpenQA::WebSockets::Client::mark_current_process_as_websocket_server;
 
-    my $ret = $self->SUPER::_is_method_allowed($method);
-    if ($ret) {
-        log_debug "IPC calling $method";
-    }
-    return $ret;
+    $self->_setup if $RUNNING;
+
+    $self->defaults(appname => 'openQA Websocket Server');
+
+    # no cookies for worker, no secrets to protect
+    $self->secrets(['nosecretshere']);
+    $self->config->{no_localhost_auth} ||= 1;
+
+    # Some plugins are shared between openQA micro services
+    push @{$self->plugins->namespaces}, 'OpenQA::Shared::Plugin', 'OpenQA::WebSockets::Plugin';
+    $self->plugin('Helpers');
+    $self->plugin('SharedHelpers');
+
+    # Some controllers are shared between openQA micro services
+    my $r = $self->routes->namespaces(['OpenQA::Shared::Controller', 'OpenQA::WebSockets::Controller']);
+
+    my $ca = $r->under('/')->to('Auth#check');
+    $ca->get('/' => {json => {name => $self->defaults('appname')}});
+    my $api = $ca->any('/api');
+    $api->post('/send_job')->to('API#send_job');
+    $api->post('/send_jobs')->to('API#send_jobs');
+    $api->post('/send_msg')->to('API#send_msg');
+    $ca->websocket('/ws/<workerid:num>')->to('Worker#ws');
+
+    OpenQA::Setup::setup_plain_exception_handler($self);
 }
 
 sub run {
-    # config Mojo to get reactor
-    my $server = OpenQA::WebSockets::Server->setup;
-    # start DBus
-    my $self = OpenQA::WebSockets->new;
-    $self->{server} = $server;
-    # start IOLoop
-    $server->run;
+    local $RUNNING = 1;
+    __PACKAGE__->new->start;
 }
 
-sub new {
-    my ($class) = @_;
-    $class = ref $class || $class;
-    my $ipc = OpenQA::IPC->ipc(1);
-    return unless $ipc;
-    my $service = $ipc->register_service('websockets');
-    my $self    = $class->SUPER::new($service, '/WebSockets');
-    $self->{ipc} = $ipc;
-    bless $self, $class;
-    # hook DBus to Mojo reactor
-    $ipc->manage_events(Mojo::IOLoop->singleton->reactor, $self);
-
-    return $self;
-}
-
-# WebSockets ABI goes here
-dbus_method('ws_is_worker_connected', ['uint32'], ['bool']);
-sub ws_is_worker_connected {
-    my ($self, @args) = @_;
-    return OpenQA::WebSockets::Server::ws_is_worker_connected(@args);
-}
-
-dbus_method('ws_send_job', [['dict', 'string', ['variant']]], [['dict', 'string', ['variant']]]);
-sub ws_send_job {
-    my ($self, $args) = @_;
-    return OpenQA::WebSockets::Server::ws_send_job($args);
-}
-
-dbus_method('ws_send', ['uint32', 'string', 'uint32']);
 sub ws_send {
-    my ($self, @args) = @_;
-    return OpenQA::WebSockets::Server::ws_send(@args);
+    my ($workerid, $msg, $jobid, $retry) = @_;
+
+    return undef unless $workerid && $msg;
+    return undef unless my $worker = OpenQA::WebSockets::Model::Status->singleton->workers->{$workerid};
+
+    $jobid ||= '';
+    $retry ||= 0;
+
+    my $tx = $worker->{tx};
+    if (!$tx || $tx->is_finished) {
+        log_debug("Unable to send command \"$msg\" to worker $workerid: worker not connected");
+
+        # try again in 10 seconds because workers try to re-connect in 10 s intervals
+        Mojo::IOLoop->timer(10 => sub { ws_send($workerid, $msg, $jobid, ++$retry); }) if ($retry < 3);
+        return 0;
+    }
+    $tx->send({json => {type => $msg, jobid => $jobid}});
+    return 1;
 }
 
-dbus_method('ws_send_all', ['string']);
-sub ws_send_all {
-    my ($self, @args) = @_;
-    return OpenQA::WebSockets::Server::ws_send_all(@args);
+sub ws_send_job {
+    my ($job_info, $message) = @_;
+    my $result = {state => {msg_sent => 0}};
+
+    unless (ref($job_info) eq 'HASH' && exists $job_info->{assigned_worker_id}) {
+        $result->{state}->{error} = "No workerid assigned";
+        return $result;
+    }
+
+    my $worker_id = $job_info->{assigned_worker_id};
+    my $worker    = OpenQA::WebSockets::Model::Status->singleton->workers->{$worker_id};
+    if (!$worker) {
+        $result->{state}->{error}
+          = "Unable to assign job to worker $worker_id: the worker has not established a ws connection";
+        return $result;
+    }
+
+    my $tx = $worker->{tx};
+    if (!$tx || $tx->is_finished) {
+        $result->{state}->{error} = "Unable to assign job to worker $worker_id: the worker is not connected anymore";
+        return $result;
+    }
+
+    my $job_ids = ref($job_info->{ids}) eq 'ARRAY' ? $job_info->{ids} : [$job_info->{id} // ()];
+    $tx->send({json => $message});
+    my $id_string = join(', ', @$job_ids) || '?';
+    log_debug("Started to send message to $worker_id for job(s) $id_string");
+    $result->{state}->{msg_sent} = 1;
+    return $result;
+}
+
+sub _setup {
+    my $self = shift;
+
+    OpenQA::Setup::read_config($self);
+    setup_log($self);
+
+    Mojo::IOLoop->recurring(
+        380 => sub {
+            log_debug('Resetting worker status table');
+            $self->status->worker_status({});
+        });
 }
 
 1;

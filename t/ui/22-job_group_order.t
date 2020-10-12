@@ -1,4 +1,4 @@
-# Copyright (C) 2016 SUSE Linux GmbH
+# Copyright (C) 2016-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -11,29 +11,25 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along
-# with this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+# with this program; if not, see <http://www.gnu.org/licenses/>.
 
-BEGIN {
-    unshift @INC, 'lib';
-}
+use Test::Most;
 
-use Mojo::Base -strict;
 use FindBin;
 use lib "$FindBin::Bin/../lib";
-use Test::More;
 use Test::Mojo;
-use Test::Warnings;
+use Test::Warnings ':report_warnings';
+use OpenQA::Test::TimeLimit '8';
 use OpenQA::Test::Case;
 
-OpenQA::Test::Case->new->init_data;
+OpenQA::Test::Case->new->init_data(fixtures_glob => '01-jobs.pl');
 
 my $t = Test::Mojo->new('OpenQA::WebAPI');
 
 sub verify_navbar {
     my ($expected) = @_;
-    my $get        = $t->get_ok('/')->status_is(200);
-    my $groups     = OpenQA::Test::Case::trim_whitespace($t->tx->res->dom->at('.navbar-nav li.dropdown')->all_text);
+    $t->get_ok('/')->status_is(200);
+    my $groups = OpenQA::Test::Case::trim_whitespace($t->tx->res->dom->at('.navbar-nav li.dropdown')->all_text);
     # in fixtures both are sort_order 0, so they are sorted by name
     is($groups, "Job Groups $expected", "got $expected");
 }
@@ -42,15 +38,15 @@ sub verify_navbar {
 verify_navbar("opensuse opensuse test");
 
 # move 'opensuse' to a higher sort order (further down)
-$t->app->db->resultset('JobGroups')->find(1001)->update({sort_order => 1});
+$t->app->schema->resultset('JobGroups')->find(1001)->update({sort_order => 1});
 verify_navbar("opensuse test opensuse");
 
 # move 'opensuse test' to an even higher sort order (further down)
-$t->app->db->resultset('JobGroups')->find(1002)->update({sort_order => 3});
+$t->app->schema->resultset('JobGroups')->find(1002)->update({sort_order => 3});
 verify_navbar("opensuse opensuse test");
 
 # create a new parent group - default sort order, no children
-my $parent = $t->app->db->resultset('JobGroupParents')->create({name => 'Hallo'});
+my $parent = $t->app->schema->resultset('JobGroupParents')->create({name => 'Hallo'});
 # it's not shown (no children)
 verify_navbar("opensuse opensuse test");
 

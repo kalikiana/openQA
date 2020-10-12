@@ -1,19 +1,24 @@
+# Copyright (C) 2019 SUSE LLC
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, see <http://www.gnu.org/licenses/>.
+
 package OpenQA::WebAPI::Controller::Admin::Influxdb;
 use Mojo::Base 'Mojolicious::Controller';
 
 use 5.018;
 
 use OpenQA::Jobs::Constants;
-
-=over 4
-
-=item queue_stats()
-
-Renders a summary of jobs scheduled and running for monitoring
-
-=back
-
-=cut
 
 sub _queue_sub_stats {
     my ($query, $state, $result) = @_;
@@ -41,20 +46,22 @@ sub _queue_output_measure {
     return $line . "\n";
 }
 
+# Renders a summary of jobs scheduled and running for monitoring
 sub jobs {
     my $self = shift;
 
     my $result = {};
 
+    my $schema = $self->schema;
     my $rs
-      = $self->db->resultset('Jobs')->search({state => OpenQA::Jobs::Constants::SCHEDULED, blocked_by_id => undef});
+      = $schema->resultset('Jobs')->search({state => OpenQA::Jobs::Constants::SCHEDULED, blocked_by_id => undef});
     _queue_sub_stats($rs, 'scheduled', $result);
-    $rs = $self->db->resultset('Jobs')
+    $rs = $schema->resultset('Jobs')
       ->search({state => OpenQA::Jobs::Constants::SCHEDULED, -not => {blocked_by_id => undef}});
     _queue_sub_stats($rs, 'blocked', $result);
-    $rs = $self->db->resultset('Jobs')->search({state => [OpenQA::Jobs::Constants::EXECUTION_STATES]});
+    $rs = $schema->resultset('Jobs')->search({state => [OpenQA::Jobs::Constants::EXECUTION_STATES]});
     _queue_sub_stats($rs, 'running', $result);
-    $rs = $self->db->resultset('Jobs')->search(
+    $rs = $schema->resultset('Jobs')->search(
         {state => [OpenQA::Jobs::Constants::EXECUTION_STATES]},
         {
             join     => [qw(assigned_worker)],
@@ -69,7 +76,7 @@ sub jobs {
     }
 
     # map group ids to names (and group by parent)
-    my $groups = $self->db->resultset('JobGroups')->search({}, {prefetch => 'parent', select => [qw(id name)]});
+    my $groups = $self->schema->resultset('JobGroups')->search({}, {prefetch => 'parent', select => [qw(id name)]});
     while (my $g = $groups->next) {
         my $name = $g->name;
         $name = $g->parent->name if $g->parent;
@@ -93,6 +100,25 @@ sub jobs {
             $text .= _queue_output_measure($url, $key, $tag, $result->{$key}->{$tag});
         }
     }
+
+    $self->render(text => $text);
+}
+
+sub minion {
+    my $self = shift;
+
+    my $stats = $self->app->minion->stats;
+    my $jobs  = {
+        active   => $stats->{active_jobs},
+        delayed  => $stats->{delayed_jobs},
+        failed   => $stats->{failed_jobs},
+        inactive => $stats->{inactive_jobs}};
+    my $workers = {active => $stats->{active_workers}, inactive => $stats->{inactive_workers}};
+
+    my $url  = $self->app->config->{global}->{base_url} || $self->req->url->base->to_string;
+    my $text = '';
+    $text .= _queue_output_measure($url, 'openqa_minion_jobs',    undef, $jobs);
+    $text .= _queue_output_measure($url, 'openqa_minion_workers', undef, $workers);
 
     $self->render(text => $text);
 }

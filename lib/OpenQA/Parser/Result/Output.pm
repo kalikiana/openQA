@@ -1,4 +1,4 @@
-# Copyright (C) 2017 SUSE LLC
+# Copyright (C) 2017-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -25,9 +25,12 @@ has 'content';
 
 sub write {
     my ($self, $dir) = @_;
-    path($dir, $self->file)->spurt($self->content);
-    $self;
+    my $content = $self->content;
+    path($dir, $self->file)->spurt($content);
+    return length $content;
 }
+
+1;
 
 =encoding utf-8
 
@@ -98,5 +101,3 @@ and implements the following new ones:
 It will write the file content in the supplied directory.
 
 =cut
-
-1;

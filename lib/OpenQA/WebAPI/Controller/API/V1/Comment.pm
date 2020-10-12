@@ -17,9 +17,7 @@ package OpenQA::WebAPI::Controller::API::V1::Comment;
 use Mojo::Base 'Mojolicious::Controller';
 
 use Date::Format;
-use OpenQA::Utils;
-use OpenQA::IPC;
-use OpenQA::Utils 'href_to_bugref';
+use OpenQA::Utils qw(:DEFAULT href_to_bugref);
 
 =pod
 
@@ -133,6 +131,17 @@ sub text {
     $self->render(json => $comment->extended_hash);
 }
 
+sub _insert_bugs_for_comment {
+    my ($self, $comment) = @_;
+
+    my $bugs = $self->app->schema->resultset('Bugs');
+    if (my $bugrefs = $comment->bugrefs) {
+        for my $bug (@$bugrefs) {
+            $bugs->get_bug($bug);
+        }
+    }
+}
+
 =over 4
 
 =item create()
@@ -149,14 +158,18 @@ sub create {
     my $comments = $self->comments();
     return unless $comments;
 
-    my $text = $self->param('text');
-    return $self->render(json => {error => 'No/invalid text specified'}, status => 400) unless $text;
+    my $validation = $self->validation;
+    $validation->required('text')->like(qr/^(?!\s*$).+/);
+    my $text = $validation->param('text');
+    return $self->reply->validation_error({format => 'json'}) if $validation->has_error;
 
     my $res = $comments->create(
         {
             text    => href_to_bugref($text),
             user_id => $self->current_user->id
         });
+
+    $self->_insert_bugs_for_comment($res);
     $self->emit_event('openqa_comment_create', {id => $res->id});
     $self->render(json => {id => $res->id});
 }
@@ -179,8 +192,10 @@ sub update {
     my $comments = $self->comments();
     return unless $comments;
 
-    my $text = $self->param('text');
-    return $self->render(json => {error => "No/invalid text specified"}, status => 400) unless $text;
+    my $validation = $self->validation;
+    $validation->required('text')->like(qr/^(?!\s*$).+/);
+    my $text = $validation->param('text');
+    return $self->reply->validation_error({format => 'json'}) if $validation->has_error;
 
     my $comment_id = $self->param('comment_id');
     my $comment    = $comments->find($self->param('comment_id'));
@@ -188,6 +203,7 @@ sub update {
     return $self->render(json => {error => "Forbidden (must be author)"},         status => 403)
       unless ($comment->user_id == $self->current_user->id);
     my $res = $comment->update({text => href_to_bugref($text)});
+    $self->_insert_bugs_for_comment($comment);
     $self->emit_event('openqa_comment_update', {id => $comment->id});
     $self->render(json => {id => $res->id});
 }
@@ -216,4 +232,3 @@ sub delete {
 }
 
 1;
-# vim: set sw=4 et:

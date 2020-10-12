@@ -1,4 +1,4 @@
-# Copyright (c) 2015 SUSE LINUX GmbH, Nuernberg, Germany.
+# Copyright (c) 2015-2019 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -16,7 +16,7 @@
 package OpenQA::WebAPI::Controller::API::V1::Locks;
 use Mojo::Base 'Mojolicious::Controller';
 
-use OpenQA::IPC;
+use OpenQA::Resource::Locks;
 
 =pod
 
@@ -46,19 +46,21 @@ code of 200 on success, 410 on error and 409 on mutex unavailable.
 =cut
 
 sub mutex_action {
-    my ($self)     = @_;
-    my $name       = $self->stash('name');
-    my $jobid      = $self->stash('job_id');
-    my $validation = $self->validation;
+    my ($self) = @_;
 
+    my $name  = $self->stash('name');
+    my $jobid = $self->stash('job_id');
+
+    my $validation = $self->validation;
     $validation->required('action')->in(qw(lock unlock));
     $validation->optional('where')->like(qr/^[0-9]+$/);
-    return $self->render(text => 'Bad request', status => 400) if ($validation->has_error);
+    return $self->reply->validation_error if $validation->has_error;
 
     my $action = $validation->param('action');
     my $where  = $validation->param('where') // '';
-    my $ipc    = OpenQA::IPC->ipc;
-    my $res    = $ipc->resourceallocator("mutex_$action", $name, $jobid, $where);
+    my $res;
+    if ($action eq 'lock') { $res = OpenQA::Resource::Locks::lock($name, $jobid, $where) }
+    else                   { $res = OpenQA::Resource::Locks::unlock($name, $jobid, $where) }
 
     return $self->render(text => 'ack',  status => 200) if $res > 0;
     return $self->render(text => 'nack', status => 410) if $res < 0;
@@ -82,15 +84,13 @@ sub mutex_create {
     my $jobid = $self->stash('job_id');
 
     my $validation = $self->validation;
-
     $validation->required('name')->like(qr/^[0-9a-zA-Z_]+$/);
-    return $self->render(text => 'Bad request', status => 400) if ($validation->has_error);
+    return $self->reply->validation_error if $validation->has_error;
 
     my $name = $validation->param('name');
 
-    my $ipc = OpenQA::IPC->ipc;
-    my $res = $ipc->resourceallocator('mutex_create', $name, $jobid);
-    return $self->render(text => 'ack', status => 200) if $res;
+    my $res = OpenQA::Resource::Locks::create($name, $jobid);
+    return $self->render(text => 'ack',  status => 200) if $res;
     return $self->render(text => 'nack', status => 409);
 }
 
@@ -108,19 +108,19 @@ on error on 409 when the referenced barrier does not exist.
 
 sub barrier_wait {
     my ($self) = @_;
-    my $jobid  = $self->stash('job_id');
-    my $name   = $self->stash('name');
+
+    my $jobid = $self->stash('job_id');
+    my $name  = $self->stash('name');
 
     my $validation = $self->validation;
     $validation->optional('where')->like(qr/^[0-9]+$/);
     $validation->optional('check_dead_job')->like(qr/^[0-9]+$/);
+    return $self->reply->validation_error if $validation->has_error;
 
-    return $self->render(text => 'Bad request', status => 400) if ($validation->has_error);
     my $where          = $validation->param('where')          // '';
     my $check_dead_job = $validation->param('check_dead_job') // 0;
 
-    my $ipc = OpenQA::IPC->ipc;
-    my $res = $ipc->resourceallocator('barrier_wait', $name, $jobid, $where, $check_dead_job);
+    my $res = OpenQA::Resource::Locks::barrier_wait($name, $jobid, $where, $check_dead_job);
 
     return $self->render(text => 'ack',  status => 200) if $res > 0;
     return $self->render(text => 'nack', status => 410) if $res < 0;
@@ -140,18 +140,19 @@ Returns a code of 200 on success or of 409 on error.
 
 sub barrier_create {
     my ($self) = @_;
+
     my $jobid = $self->stash('job_id');
 
     my $validation = $self->validation;
     $validation->required('name')->like(qr/^[0-9a-zA-Z_]+$/);
     $validation->required('tasks')->like(qr/^[0-9]+$/);
-    return $self->render(text => 'Bad request', status => 400) if ($validation->has_error);
+    return $self->reply->validation_error if $validation->has_error;
+
     my $tasks = $validation->param('tasks');
     my $name  = $validation->param('name');
 
-    my $ipc = OpenQA::IPC->ipc;
-    my $res = $ipc->resourceallocator('barrier_create', $name, $jobid, $tasks);
-    return $self->render(text => 'ack', status => 200) if $res;
+    my $res = OpenQA::Resource::Locks::barrier_create($name, $jobid, $tasks);
+    return $self->render(text => 'ack',  status => 200) if $res;
     return $self->render(text => 'nack', status => 409);
 }
 
@@ -167,19 +168,18 @@ Removes a barrier given its name.
 
 sub barrier_destroy {
     my ($self) = @_;
-    my $jobid  = $self->stash('job_id');
-    my $name   = $self->stash('name');
+
+    my $jobid = $self->stash('job_id');
+    my $name  = $self->stash('name');
 
     my $validation = $self->validation;
     $validation->optional('where')->like(qr/^[0-9]+$/);
-    return $self->render(text => 'Bad request', status => 400) if ($validation->has_error);
-    my $where = $validation->param('where') // '';
+    return $self->reply->validation_error if $validation->has_error;
 
-    my $ipc = OpenQA::IPC->ipc;
-    my $res = $ipc->resourceallocator('barrier_destroy', $name, $jobid, $where);
+    my $where = $validation->param('where') // '';
+    my $res   = OpenQA::Resource::Locks::barrier_destroy($name, $jobid, $where);
 
     return $self->render(text => 'ack', status => 200);
 }
 
 1;
-# vim: set sw=4 et:

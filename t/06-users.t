@@ -1,6 +1,5 @@
-#!/usr/bin/env perl -w
-
-# Copyright (C) 2014 SUSE Linux Products GmbH
+#!/usr/bin/env perl
+# Copyright (C) 2014-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -13,36 +12,30 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along
-# with this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+# with this program; if not, see <http://www.gnu.org/licenses/>.
 
-use strict;
-use warnings;
-
-BEGIN {
-    unshift @INC, 'lib';
-}
+use Test::Most;
 
 use FindBin;
 use lib "$FindBin::Bin/lib";
 use OpenQA::Utils;
 use OpenQA::Test::Database;
-use Test::More;
+use OpenQA::Test::TimeLimit '10';
 use Test::Mojo;
-use Test::Warnings;
+use Test::Warnings ':report_warnings';
 
 OpenQA::Test::Database->new->create(skip_fixtures => 1);
 my $t = Test::Mojo->new('OpenQA::WebAPI');
 
 subtest 'new users are not ops and admins' => sub {
     my $mordred_id = 'https://openid.badguys.uk/mordred';
-    my $user       = $t->app->db->resultset('Users')->create({username => $mordred_id});
+    my $user       = $t->app->schema->resultset('Users')->create({username => $mordred_id});
     ok(!$user->is_admin,    'new users are not admin by default');
     ok(!$user->is_operator, 'new users are not operator by default');
 };
 
 subtest 'system user presence' => sub {
-    my $system_user = $t->app->db->resultset("Users")->search({username => 'system'})->first;
+    my $system_user = $t->app->schema->resultset("Users")->search({username => 'system'})->first;
     ok($system_user,               'system user exists');
     ok(!$system_user->is_admin,    'system user is not an admin');
     ok(!$system_user->is_operator, 'system user is not an operator');
@@ -50,13 +43,13 @@ subtest 'system user presence' => sub {
 };
 
 subtest 'new user is admin if no admin is present' => sub {
-    my $admins = $t->app->db->resultset('Users')->search({is_admin => 1});
+    my $users  = $t->app->schema->resultset('Users');
+    my $admins = $users->search({is_admin => 1});
     while (my $u = $admins->next) {
         $u->update({is_admin => 0});
     }
-    ok(!$t->app->db->resultset('Users')->search({is_admin => 1})->all, 'no admin is present');
-    require OpenQA::Schema::Result::Users;
-    my $user = OpenQA::Schema::Result::Users->create_user('test_user', $t->app->db);
+    ok(!$users->search({is_admin => 1})->all, 'no admin is present');
+    my $user = $users->create_user('test_user');
     ok($user->is_admin,    'new user is admin by default if there was no admin');
     ok($user->is_operator, 'new user is operator by default if there was no admin');
 };

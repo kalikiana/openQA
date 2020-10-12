@@ -1,4 +1,4 @@
-# Copyright (C) 2015 SUSE Linux GmbH
+# Copyright (C) 2015 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -17,8 +17,6 @@ package OpenQA::WebAPI::Controller::API::V1::Command;
 use Mojo::Base 'Mojolicious::Controller';
 
 use OpenQA::Utils;
-use OpenQA::IPC;
-use Try::Tiny;
 
 =pod
 
@@ -52,7 +50,7 @@ sub create {
     my $self     = shift;
     my $workerid = $self->stash('workerid');
     my $command  = $self->param('command');
-    my $worker   = $self->db->resultset('Workers')->find($workerid);
+    my $worker   = $self->schema->resultset('Workers')->find($workerid);
 
     if (!$worker) {
         log_warning("Trying to send command \'$command\' to unknown worker id $workerid");
@@ -65,4 +63,3 @@ sub create {
 }
 
 1;
-# vim: set sw=4 et:

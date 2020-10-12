@@ -14,14 +14,7 @@
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 
 package OpenQA::WebAPI::Auth::Fake;
-
-use strict;
-use warnings;
-
-use OpenQA::Schema::Result::Users;
-use Exporter 'import';
-
-our @EXPORT_OK = qw(auth_login auth_logout);
+use Mojo::Base -base;
 
 sub auth_logout {
     return;
@@ -48,8 +41,8 @@ sub auth_login {
     my $userinfo = $users{$user}             || die "No such user";
     $userinfo->{username} = $user;
 
-    $user = OpenQA::Schema::Result::Users->create_user(
-        $userinfo->{username}, $self->db,
+    $user = $self->schema->resultset('Users')->create_user(
+        $userinfo->{username},
         email    => $userinfo->{email},
         nickname => $userinfo->{username},
         fullname => $userinfo->{fullname});

@@ -1,11 +1,11 @@
 [Unit]
-Description=The openQA gru daemon
+Description=The openQA daemon for various background tasks like cleanup and saving needles
 After=postgresql.service openqa-setup-db.service
 Wants=openqa-setup-db.service
 
 [Service]
 User=geekotest
-ExecStart=/usr/share/openqa/script/openqa gru -m production run
+ExecStart=/usr/share/openqa/script/openqa-gru
 Nice=19
 Restart=on-failure
 

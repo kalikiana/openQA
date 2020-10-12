@@ -1,4 +1,4 @@
-# Copyright (C) 2018 SUSE LLC
+# Copyright (C) 2018-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -17,7 +17,6 @@ package OpenQA::WebAPI::Command::gru::run;
 use Mojo::Base 'Minion::Command::minion::worker';
 
 use Mojo::Util 'getopt';
-use OpenQA::WebAPI::GruJob;
 
 has description => 'Start Gru worker';
 has usage       => sub { shift->extract_usage };
@@ -25,28 +24,16 @@ has usage       => sub { shift->extract_usage };
 sub run {
     my ($self, @args) = @_;
 
-    getopt \@args, 'o|oneshot' => \(my $oneshot);
+    getopt \@args, 'o|oneshot' => \my $oneshot, 'reset-locks' => \my $reset_locks;
 
     my $minion = $self->app->minion;
-    $minion->on(
-        worker => sub {
-            my ($minion, $worker) = @_;
+    return $minion->perform_jobs if $oneshot;
 
-            # Only one job can run at a time for now (until all Gru tasks are parallelism safe)
-            $worker->status->{jobs} = 1;
-
-            $worker->on(
-                dequeue => sub {
-                    my ($worker, $job) = @_;
-
-                    # Reblessing the job is fine for now, but in the future it would be nice
-                    # to use a role instead
-                    bless $job, 'OpenQA::WebAPI::GruJob';
-                });
-        });
-
-    if   ($oneshot) { $minion->perform_jobs }
-    else            { $self->SUPER::run(@args) }
+    if ($reset_locks) {
+        $self->app->log->info('Resetting all leftover Gru locks after restart');
+        $minion->reset({locks => 1});
+    }
+    $self->SUPER::run(@args);
 }
 
 1;
@@ -65,7 +52,8 @@ OpenQA::WebAPI::Command::gru::run - Gru run command
     script/openqa gru run -o
 
   Options:
-    -o, --oneshot   Perform all currently enqueued jobs and then exit
+    -o, --oneshot       Perform all currently enqueued jobs and then exit
+        --reset-locks   Reset all remaining locks before startup
 
     See 'script/openqa minion worker -h' for all available options.
 
@@ -74,6 +62,6 @@ OpenQA::WebAPI::Command::gru::run - Gru run command
 
 L<OpenQA::WebAPI::Command::gru::run> is a subclass of
 L<Minion::Command::minion::worker> that adds Gru features with
-L<OpenQA::WebAPI::GruJob>.
+L<OpenQA::Shared::GruJob>.
 
 =cut

@@ -9,7 +9,6 @@ temp
 /t/data/openqa/testresults
 /t/data/openqa/share/tests
 /t/data/7da661d0c3faf37d49d33b6fc308f2.png
-/t/log_phantomjs
 /factory
 /public/packed/
 /public/sass/bootstrap.scss
@@ -30,7 +29,6 @@ t/diagram-v*.png
 assets/cache/
 assets/assetpack.db
 nytprof/
-.openqa-travis
 t/full-stack.d/config/database.ini
 t/full-stack.d/config/workers.ini
 t/full-stack.d/openqa/db/db.sqlite
@@ -47,3 +45,6 @@ t/data/openqa/share/factory/hdd/hdd_image.qcow2
 t/data/openqa/share/factory/iso/Core-7.2.iso
 t/log_chromedriver
 docker.env
+pool????/
+log/
+log_test_postgresql

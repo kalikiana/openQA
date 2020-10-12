@@ -1,6 +1,7 @@
 #!/usr/bin/env perl
 
 # Copyright (C) 2015 Red Hat
+# Copyright (C) 2015-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -15,39 +16,33 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 
-BEGIN {
-    use FindBin qw($Bin);
-    use lib "$Bin/../lib";
-}
-
 use strict;
 use warnings;
+
+use FindBin qw($RealBin);
+use lib "$RealBin/../lib";
+
 use OpenQA::Schema::Result::ApiKeys;
-use OpenQA::Schema::Result::Users;
 use OpenQA::Schema;
+use OpenQA::Utils 'random_hex';
 use Getopt::Long;
 
-my $email       = 'admin@example.com';
-my $nickname    = 'admin';
-my $fullname    = 'Administrator';
-my $key         = "";
-my $secret      = "";
-my $help        = 0;
+my $email    = 'admin@example.com';
+my $nickname = 'admin';
+my $fullname = 'Administrator';
+my $key      = "";
+my $secret   = "";
+my $user     = $ARGV[0];
+my $help     = 1 unless $user && scalar @ARGV > 1;
 
 my $result = GetOptions(
-    "email=s"       => \$email,
-    "nickname=s"    => \$nickname,
-    "fullname=s"    => \$fullname,
-    "key=s"         => \$key,
-    "secret=s"      => \$secret,
-    "help"          => \$help,
+    "email=s"    => \$email,
+    "nickname=s" => \$nickname,
+    "fullname=s" => \$fullname,
+    "key=s"      => \$key,
+    "secret=s"   => \$secret,
+    "help"       => \$help,
 );
-
-my $user = $ARGV[0];
-
-if (!$user || (scalar @ARGV > 1)) {
-    $help = 1;
-}
 
 if ($help) {
     print "Usage: $0 [options] user \n\n";
@@ -60,27 +55,32 @@ if ($help) {
     exit;
 }
 
-if (($key || $secret) &&
-    !($key =~ /^[[:xdigit:]]{16}$/ && $secret =~ /^[[:xdigit:]]{16}$/)) {
-    warn "--key and --secret must both be 16 digit hexadecimals.\n";
-    exit 1;
+if (($key || $secret)
+    && !($key =~ /^[[:xdigit:]]{16}$/ && $secret =~ /^[[:xdigit:]]{16}$/))
+{
+    die "--key and --secret must both be 16 digit hexadecimals.\n";
 }
 
 unless ($key) {
-    $key    = db_helpers::rndhexU;
-    $secret = db_helpers::rndhexU;
+    $key    = random_hex();
+    $secret = random_hex();
     print "Key: $key\n";
     print "Secret: $secret\n";
 }
 
-my $schema = OpenQA::Schema::connect_db();
-my $users = $schema->resultset('Users')->find({ is_admin => 1 });
+my $schema = OpenQA::Schema->singleton;
+my $users  = $schema->resultset('Users')->find({is_admin => 1});
 if ($users != 0) {
     warn "An admin user already exists! Use client or web UI to create further users.\n";
     exit 1;
 }
-my $account = OpenQA::Schema::Result::Users->create_user($user, $schema, email => $email, nickname => $nickname, fullname => $fullname, is_admin => 1);
+my $account = $schema->resultset('Users')->create_user(
+    $user,
+    email    => $email,
+    nickname => $nickname,
+    fullname => $fullname,
+    is_admin => 1
+);
 
 $schema->resultset("ApiKeys")->create({user_id => $account->id, key => $key, secret => $secret});
 
-# vim: set sw=4 sts=4 et:

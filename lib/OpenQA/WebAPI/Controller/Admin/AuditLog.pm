@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2016 SUSE LLC
+# Copyright (C) 2015-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -22,25 +22,15 @@ use 5.018;
 use Time::Piece;
 use Time::Seconds;
 use Time::ParseDate;
-use OpenQA::Utils 'log_warning';
-use OpenQA::ServerSideDataTable;
+use Mojo::JSON 'encode_json';
+use OpenQA::WebAPI::ServerSideDataTable;
 
 sub index {
     my ($self) = @_;
     $self->stash(audit_enabled => $self->app->config->{global}{audit_enabled});
     if ($self->param('eventid')) {
-        my $event
-          = $self->db->resultset('AuditEvents')->search({'me.id' => $self->param('eventid')}, {prefetch => 'owner'});
-        if ($event) {
-            $event = $event->single;
-            $self->stash('id',         $event->id);
-            $self->stash('date',       $event->t_created);
-            $self->stash('event',      $event->event);
-            $self->stash('connection', $event->connection_id);
-            $self->stash('owner',      $event->owner->nickname);
-            $self->stash('event_data', $event->event_data);
-            return $self->render('admin/audit_log/event');
-        }
+        $self->stash('search', 'id:' . $self->param('eventid'));
+        return $self->render('admin/audit_log/index');
     }
     $self->stash('search', $self->param('search'));
     $self->render('admin/audit_log/index');
@@ -48,22 +38,40 @@ sub index {
 
 sub productlog {
     my ($self) = @_;
-    my $entries = $self->param('entries') // 100;
-    $self->stash(audit_enabled => $self->app->config->{global}{audit_enabled});
-    my $events_rs = $self->db->resultset("AuditEvents")
-      ->search({event => 'iso_create'}, {order_by => {-desc => 'me.id'}, prefetch => 'owner', rows => $entries});
-    my @events;
-    while (my $event = $events_rs->next) {
-        my $data = {
-            id         => $event->id,
-            user       => $event->owner ? $event->owner->nickname : 'system',
-            event_data => $event->event_data,
-            event_time => $event->t_created,
-        };
-        push @events, $data;
-    }
-    $self->stash(isos => \@events);
     $self->render('admin/audit_log/productlog');
+}
+
+sub productlog_ajax {
+    my ($self) = @_;
+
+    my @searchable_columns = qw(me.distri me.version me.flavor me.arch me.build me.iso);
+    my @filter_conds;
+    if (my $id = $self->param('id')) {
+        push(@filter_conds, {'me.id' => $id});
+    }
+    if (my $search_value = $self->param('search[value]')) {
+        my %condition = (like => "\%$search_value%");
+        push(@filter_conds, {-or => [map { $_ => \%condition } @searchable_columns]});
+    }
+
+    OpenQA::WebAPI::ServerSideDataTable::render_response(
+        controller            => $self,
+        resultset             => 'ScheduledProducts',
+        columns               => [qw(me.id me.t_created me.status me.settings me.results), @searchable_columns],
+        filter_conds          => (@filter_conds ? \@filter_conds : undef),
+        additional_params     => {prefetch => 'triggered_by', cache => 1},
+        prepare_data_function => sub {
+            my ($scheduled_products) = @_;
+            my @scheduled_products;
+            while (my $scheduled_product = $scheduled_products->next) {
+                my $data             = $scheduled_product->to_hash;
+                my $responsible_user = $scheduled_product->triggered_by;
+                $data->{user_name} = $responsible_user ? $responsible_user->name : 'system';
+                push(@scheduled_products, $data);
+            }
+            return \@scheduled_products;
+        },
+    );
 }
 
 sub _add_single_query {
@@ -83,6 +91,9 @@ sub _add_single_query {
     if (my $actual_key = $key_mapping{$key}) {
         push(@{$query->{$actual_key}}, ($actual_key => {-like => '%' . $search . '%'}));
     }
+    elsif ($key eq 'id') {
+        push(@{$query->{$key}}, ("CAST(me.id AS text)" => {-like => '%' . $search . '%'}));
+    }
     elsif ($key eq 'older' || $key eq 'newer') {
         if ($search eq 'today') {
             $search = '1 day ago';
@@ -92,7 +103,7 @@ sub _add_single_query {
         }
         else {
             $search = '1 ' . $search unless $search =~ /^[\s\d]/;
-            $search .= ' ago' unless $search =~ /\sago\s*$/;
+            $search .= ' ago'        unless $search =~ /\sago\s*$/;
         }
         if (my $time = parsedate($search, PREFER_PAST => 1, DATE_REQUIRED => 1)) {
             my $time_conditions = ($query->{'me.t_created'} //= {-and => []});
@@ -142,7 +153,7 @@ sub _get_search_query {
 sub ajax {
     my ($self) = @_;
 
-    OpenQA::ServerSideDataTable::render_response(
+    OpenQA::WebAPI::ServerSideDataTable::render_response(
         controller        => $self,
         resultset         => 'AuditEvents',
         columns           => [qw(me.t_created connection_id owner.nickname event_data event)],

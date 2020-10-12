@@ -1,4 +1,4 @@
-# Copyright (C) 2014 SUSE Linux Products GmbH
+# Copyright (C) 2014 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -19,6 +19,9 @@ use strict;
 use warnings;
 
 use base 'DBIx::Class::Core';
+
+use URI::Escape 'uri_escape';
+use Digest::MD5 'md5_hex';
 
 __PACKAGE__->table('users');
 __PACKAGE__->load_components(qw(InflateColumn::DateTime Timestamps));
@@ -63,7 +66,7 @@ __PACKAGE__->add_timestamps;
 __PACKAGE__->set_primary_key('id');
 __PACKAGE__->has_many(api_keys => 'OpenQA::Schema::Result::ApiKeys', 'user_id');
 __PACKAGE__->has_many(
-    development_sessions => 'OpenQA::Schema::Result::DevelopmentSessions',
+    developer_sessions => 'OpenQA::Schema::Result::DeveloperSessions',
     'user_id', {cascade_delete => 1});
 __PACKAGE__->add_unique_constraint([qw(username)]);
 
@@ -79,9 +82,6 @@ sub name {
     return $self->{_name};
 }
 
-use URI::Escape 'uri_escape';
-use Digest::MD5 'md5_hex';
-
 sub gravatar {
     my ($self, $size) = @_;
     $size //= 40;
@@ -95,21 +95,4 @@ sub gravatar {
 }
 
 
-sub create_user {
-    my ($self, $id, $db, %attrs) = @_;
-
-    return unless $id;
-    my $user = $db->resultset("Users")->update_or_new({username => $id, %attrs});
-
-    if (!$user->in_storage) {
-        if (not $db->resultset("Users")->find({is_admin => 1}, {rows => 1})) {
-            $user->is_admin(1);
-            $user->is_operator(1);
-        }
-        $user->insert;
-    }
-    return $user;
-}
-
 1;
-# vim: set sw=4 et:

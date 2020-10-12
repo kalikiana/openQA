@@ -1,4 +1,4 @@
-# Copyright (c) 2015 SUSE LINUX GmbH, Nuernberg, Germany.
+# Copyright (c) 2015 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -64,7 +64,7 @@ sub get_children_status {
     }
     my $jobid = $self->stash('job_id');
 
-    my @res = $self->db->resultset('Jobs')
+    my @res = $self->schema->resultset('Jobs')
       ->search({'parents.parent_job_id' => $jobid, state => $status}, {columns => ['id'], join => 'parents'});
     my @res_ids = map { $_->id } @res;
     return $self->render(json => {jobs => \@res_ids}, status => 200);
@@ -85,9 +85,11 @@ sub get_children {
     my ($self) = @_;
     my $jobid = $self->stash('job_id');
 
-    my @res = $self->db->resultset('Jobs')->search(
-        {'parents.parent_job_id' => $jobid, 'parents.dependency' => OpenQA::Schema::Result::JobDependencies::PARALLEL},
-        {columns                 => ['id', 'state'], join => 'parents'});
+    my @res
+      = $self->schema->resultset('Jobs')
+      ->search(
+        {'parents.parent_job_id' => $jobid, 'parents.dependency' => OpenQA::JobDependencies::Constants::PARALLEL},
+        {columns                 => ['id', 'state'], join        => 'parents'});
     my %res_ids = map { ($_->id, $_->state) } @res;
     return $self->render(json => {jobs => \%res_ids}, status => 200);
 }
@@ -107,8 +109,10 @@ sub get_parents {
     my ($self) = @_;
     my $jobid = $self->stash('job_id');
 
-    my @res = $self->db->resultset('Jobs')->search(
-        {'children.child_job_id' => $jobid, 'children.dependency' => OpenQA::Schema::Result::JobDependencies::PARALLEL},
+    my @res
+      = $self->schema->resultset('Jobs')
+      ->search(
+        {'children.child_job_id' => $jobid, 'children.dependency' => OpenQA::JobDependencies::Constants::PARALLEL},
         {columns                 => ['id'], join                  => 'children'});
     my @res_ids = map { $_->id } @res;
     return $self->render(json => {jobs => \@res_ids}, status => 200);

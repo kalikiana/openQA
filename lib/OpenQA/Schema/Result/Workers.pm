@@ -1,5 +1,5 @@
-# Copyright (C) 2015 SUSE Linux GmbH
-#               2016-2018 SUSE LLC
+# Copyright (C) 2015 SUSE LLC
+#               2016-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -12,8 +12,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along
-# with this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+# with this program; if not, see <http://www.gnu.org/licenses/>.
 
 package OpenQA::Schema::Result::Workers;
 
@@ -24,14 +23,12 @@ use base 'DBIx::Class::Core';
 
 use DBIx::Class::Timestamps 'now';
 use Try::Tiny;
-use OpenQA::Utils 'log_error';
-use OpenQA::IPC;
-use db_helpers;
-use OpenQA::Constants 'WORKERS_CHECKER_THRESHOLD';
+use OpenQA::App;
+use OpenQA::Log qw(log_error log_warning);
+use OpenQA::WebSockets::Client;
+use OpenQA::Constants qw(WORKER_API_COMMANDS DB_TIMESTAMP_ACCURACY);
+use OpenQA::Jobs::Constants;
 use Mojo::JSON qw(encode_json decode_json);
-
-use constant COMMANDS =>
-  qw(quit abort scheduler_abort cancel obsolete livelog_stop livelog_start developer_session_start);
 
 __PACKAGE__->table('workers');
 __PACKAGE__->load_components(qw(InflateColumn::DateTime Timestamps));
@@ -51,6 +48,10 @@ __PACKAGE__->add_columns(
         is_foreign_key => 1,
         is_nullable    => 1
     },
+    t_seen => {
+        data_type   => 'timestamp',
+        is_nullable => 1,
+    },
     upload_progress => {
         data_type   => 'jsonb',
         is_nullable => 1,
@@ -64,7 +65,7 @@ __PACKAGE__->set_primary_key('id');
 __PACKAGE__->add_unique_constraint([qw(host instance)]);
 # only one worker can work on a job
 __PACKAGE__->add_unique_constraint([qw(job_id)]);
-__PACKAGE__->belongs_to(job => 'OpenQA::Schema::Result::Jobs', 'job_id');
+__PACKAGE__->belongs_to(job => 'OpenQA::Schema::Result::Jobs', 'job_id', {on_delete => 'SET NULL'});
 __PACKAGE__->has_many(
     previous_jobs => 'OpenQA::Schema::Result::Jobs',
     'assigned_worker_id',
@@ -78,9 +79,6 @@ __PACKAGE__->inflate_column(
         deflate => sub { encode_json(shift) },
     });
 
-# TODO
-# INSERT INTO workers (id, t_created) VALUES(0, datetime('now'));
-
 sub name {
     my ($self) = @_;
     return $self->host . ":" . $self->instance;
@@ -88,7 +86,7 @@ sub name {
 
 sub seen {
     my ($self, $workercaps, $error) = @_;
-    $self->update({t_updated => now()});
+    $self->update({t_seen => now()});
     $self->update_caps($workercaps) if $workercaps;
 }
 
@@ -100,10 +98,6 @@ sub update_caps {
     for my $cap (keys %{$workercaps}) {
         $self->set_property(uc $cap, $workercaps->{$cap}) if $workercaps->{$cap};
     }
-}
-
-sub all_properties {
-    map { $_->key => $_->value } shift->properties->all();
 }
 
 sub get_property {
@@ -140,13 +134,10 @@ sub set_property {
 sub dead {
     my ($self) = @_;
 
+    return 1 unless my $t_seen = $self->t_seen;
     my $dt = DateTime->now(time_zone => 'UTC');
-    # check for workers active in last WORKERS_CHECKER_THRESHOLD
-    # last seen should be updated at least in MAX_TIMER t in worker
-    # and should not be greater than WORKERS_CHECKER_THRESHOLD.
-    $dt->subtract(seconds => WORKERS_CHECKER_THRESHOLD);
-
-    $self->t_updated < $dt;
+    $dt->subtract(seconds => OpenQA::App->singleton->config->{global}->{worker_timeout} - DB_TIMESTAMP_ACCURACY);
+    $t_seen < $dt;
 }
 
 sub websocket_api_version {
@@ -175,7 +166,7 @@ sub currentstep {
     my ($self) = @_;
 
     return unless ($self->job);
-    my $r = $self->job->modules->find({result => 'running'});
+    my $r = $self->job->modules->find({result => 'running'}, {order_by => {-desc => 't_updated'}, rows => 1});
     $r->name if $r;
 }
 
@@ -186,12 +177,6 @@ sub status {
     return 'broken'  if ($self->error);
     return 'running' if ($self->job);
     return 'idle';
-}
-
-sub connected {
-    my ($self) = @_;
-    my $ipc = OpenQA::IPC->ipc;
-    return $ipc->websockets('ws_is_worker_connected', $self->id) ? 1 : 0;
 }
 
 sub unprepare_for_work {
@@ -225,50 +210,88 @@ sub info {
         my $cs = $self->currentstep;
         $settings->{currentstep} = $cs if $cs;
     }
-    $settings->{alive}     = $self->dead ? 0                      : 1;
-    $settings->{connected} = $live       ? $self->connected       : $settings->{alive};
-    $settings->{websocket} = $live       ? $settings->{connected} : 0;
+    my $alive = $settings->{alive} = $settings->{connected} = $self->dead ? 0 : 1;
+    $settings->{websocket} = $live ? $alive : 0;
 
-    # $self->connected is expensive
-    # should be done only on single view
+    # note: The keys "connected" and "websocket" are only provided for compatibility. The "live"
+    #       parameter makes no actual difference anymore. (`t_seen` is decreased when a worker
+    #       disconnects from the ws server so relying on it is as live as it gets.)
+
     return $settings;
 }
 
 sub send_command {
     my ($self, %args) = @_;
-    return if (!defined $args{command});
+    return undef if (!defined $args{command});
 
-    if (!grep { $args{command} eq $_ } COMMANDS) {
+    if (!grep { $args{command} eq $_ } WORKER_API_COMMANDS) {
         my $msg = 'Trying to issue unknown command "%s" for worker "%s:%n"';
         log_error(sprintf($msg, $args{command}, $self->host, $self->instance));
-        return;
+        return undef;
     }
 
-    # somehow tests doesnt have this set up
-    if (defined $OpenQA::Utils::app) {
-        try {
-            $OpenQA::Utils::app->emit_event('openqa_command_enqueue',
-                {workerid => $self->id, command => $args{command}});
-        };
+    try {
+        OpenQA::App->singleton->emit_event(
+            openqa_command_enqueue => {workerid => $self->id, command => $args{command}});
+    };
+
+    # prevent ws server querying itself (which would cause it to hang until the connection times out)
+    if (OpenQA::WebSockets::Client::is_current_process_the_websocket_server) {
+        return OpenQA::WebSockets::ws_send($self->id, $args{command}, $args{job_id}, undef);
     }
 
-    OpenQA::IPC->ipc->websockets('ws_send', $self->id, $args{command}, $args{job_id});
-    if ($@) {
+    my $client = OpenQA::WebSockets::Client->singleton;
+    try { $client->send_msg($self->id, $args{command}, $args{job_id}) }
+    catch {
         log_error(
             sprintf(
-                'Failed dispatching message to websocket server over ipc for worker "%s:%n"',
-                $self->host, $self->instance
+                'Failed dispatching message to websocket server over ipc for worker "%s:%n": %s',
+                $self->host, $self->instance, $_
             ));
-        return;
-    }
+        return undef;
+    };
     return 1;
 }
 
-sub to_string {
+sub unfinished_jobs {
     my ($self) = @_;
 
-    return $self->host . ':' . $self->instance;
+    return $self->previous_jobs->search({t_finished => undef});
+}
+
+sub set_current_job {
+    my ($self, $job) = @_;
+    $self->update({job_id => $job->id});
+}
+
+sub reschedule_assigned_jobs {
+    my ($self, $currently_assigned_jobs) = @_;
+    $currently_assigned_jobs //= [$self->job, $self->unfinished_jobs];
+
+    my %considered_jobs;
+    for my $associated_job (@$currently_assigned_jobs) {
+        next unless defined $associated_job;
+
+        # prevent doing this twice for the same job ($current_job and @unfinished_jobs might overlap)
+        my $job_id = $associated_job->id;
+        next if exists $considered_jobs{$job_id};
+        $considered_jobs{$job_id} = 1;
+
+        # consider only assigned jobs here
+        # note: Running jobs are only marked as incomplete on worker registration (and not here) because that
+        #       operation can be quite costly.
+        next if $associated_job->state ne ASSIGNED;
+
+        # set associated job which was only assigned back to scheduled
+        # note: Using a transaction here so we don't end up with an inconsistent state when an error occurs.
+        try {
+            $self->result_source->schema->txn_do(sub { $associated_job->reschedule_state });
+        }
+        catch {
+            my $worker_id = $self->id;                                                           # uncoverable statement
+            log_warning("Unable to re-schedule job $job_id abandoned by worker $worker_id: $_"); # uncoverable statement
+        };
+    }
 }
 
 1;
-# vim: set sw=4 et:

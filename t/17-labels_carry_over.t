@@ -1,6 +1,6 @@
-#! /usr/bin/perl
+#!/usr/bin/env perl
 
-# Copyright (C) 2016-2018 SUSE LLC
+# Copyright (C) 2016-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -13,27 +13,20 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along
-# with this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+# with this program; if not, see <http://www.gnu.org/licenses/>.
 
-BEGIN {
-    unshift @INC, 'lib';
-    $ENV{OPENQA_TEST_IPC} = 1;
-}
+use Test::Most;
 
-use Mojo::Base -strict;
 use FindBin;
 use lib "$FindBin::Bin/lib";
-use Test::More;
 use Test::Mojo;
-use Test::Warnings;
+use Test::Warnings ':report_warnings';
 use OpenQA::Test::Case;
-use OpenQA::Scheduler;
-use OpenQA::WebSockets;
-use OpenQA::ResourceAllocator;
+use OpenQA::Test::TimeLimit '10';
 use Mojo::JSON qw(decode_json);
 
 my $test_case;
+my $schema;
 my $t;
 my $auth;
 my $rs;
@@ -42,31 +35,29 @@ my $comment_must
 
 sub set_up {
     $test_case = OpenQA::Test::Case->new;
-    $test_case->init_data;
-    $t = Test::Mojo->new('OpenQA::WebAPI');
-    my $sh = OpenQA::Scheduler->new;
-    my $ws = OpenQA::WebSockets->new;
-    my $ra = OpenQA::ResourceAllocator->new;
-    $rs   = $t->app->db->resultset("Jobs");
-    $auth = {'X-CSRF-Token' => $t->ua->get('/tests')->res->dom->at('meta[name=csrf-token]')->attr('content')};
+    $schema    = $test_case->init_data(fixtures_glob => '01-jobs.pl 03-users.pl 05-job_modules.pl');
+    $t         = Test::Mojo->new('OpenQA::WebAPI');
+    $rs        = $t->app->schema->resultset("Jobs");
+    $auth      = {'X-CSRF-Token' => $t->ua->get('/tests')->res->dom->at('meta[name=csrf-token]')->attr('content')};
     $test_case->login($t, 'percival');
 }
 
 sub comments {
     my ($url) = @_;
-    my $get = $t->get_ok($url)->status_is(200);
-    return $get->tx->res->dom->find('div.comments .media-comment > p')->map('content');
+    return $t->get_ok("$url/comments_ajax")->status_is(200)->tx->res->dom->find('.media-comment > p')->map('content');
 }
 
 sub restart_with_result {
     my ($old_job, $result) = @_;
-    my $get     = $t->post_ok("/api/v1/jobs/$old_job/restart", $auth)->status_is(200);
-    my $res     = decode_json($get->tx->res->body);
+    $t->post_ok("/api/v1/jobs/$old_job/restart", $auth)->status_is(200);
+    my $res     = decode_json($t->tx->res->body);
     my $new_job = $res->{result}[0]->{$old_job};
     $t->post_ok("/api/v1/jobs/$new_job/set_done", $auth => form => {result => $result})->status_is(200);
     return $res;
 }
+
 set_up;
+$schema->txn_begin;
 
 subtest '"happy path": failed->failed carries over last issue reference' => sub {
     my $label          = 'label:false_positive';
@@ -79,10 +70,23 @@ subtest '"happy path": failed->failed carries over last issue reference' => sub 
     is(scalar @comments_previous, 3,               'all entered comments found');
     is($comments_previous[0],     $label,          'comment present on previous test result');
     is($comments_previous[2],     $simple_comment, 'another comment present');
-    $t->post_ok('/api/v1/jobs/99963/set_done', $auth => form => {result => 'failed'})->status_is(200);
-    my @comments_current = @{comments('/tests/99963')};
-    is(join('', @comments_current), $comment_must, 'only one label is carried over');
-    like($comments_current[0], qr/\Q$second_label/, 'last entered label found, it is expanded');
+
+    my $group = $t->app->schema->resultset('JobGroups')->find(1001);
+
+    subtest 'carry over prevented via job group settings' => sub {
+        $group->update({carry_over_bugrefs => 0});
+        $t->post_ok('/api/v1/jobs/99963/set_done', $auth => form => {result => 'failed'})->status_is(200);
+        is_deeply(comments('/tests/99963'), [], 'no bugrefs carried over');
+    };
+
+    subtest 'carry over enabled in job group settings' => sub {
+        $group->update({carry_over_bugrefs => 1});
+        $t->post_ok('/api/v1/jobs/99963/set_done', $auth => form => {result => 'failed'})->status_is(200);
+
+        my @comments_current = @{comments('/tests/99963')};
+        is(join('', @comments_current), $comment_must, 'only one bugref is carried over');
+        like($comments_current[0], qr/\Q$second_label/, 'last entered bugref found, it is expanded');
+    };
 };
 
 my ($job, $old_job);
@@ -117,12 +121,12 @@ subtest 'failed->failed labels which are not bugrefs are *not* carried over' => 
     $old_job = $job;
     my @comments_new = @{comments($res->{test_url}[0]->{$old_job})};
     is(join('', @comments_new), '', 'no simple labels are carried over');
-    is(scalar @comments_new, 0, 'no simple label present in new result');
+    is(scalar @comments_new,    0,  'no simple label present in new result');
 };
 
+# Reset to a clean state
+$schema->txn_rollback;
 
-# Init data again to have clean state
-$test_case->init_data;
 subtest 'failed in different modules *without* bugref in details' => sub {
     $t->post_ok('/api/v1/jobs/99962/comments', $auth => form => {text => 'bsc#1234'})->status_is(200);
     # Add details for the failure

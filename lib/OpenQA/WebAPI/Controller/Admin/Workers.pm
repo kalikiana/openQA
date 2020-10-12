@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2018 SUSE LLC
+# Copyright (C) 2015-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -11,29 +11,38 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along
-# with this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+# with this program; if not, see <http://www.gnu.org/licenses/>.
 
 package OpenQA::WebAPI::Controller::Admin::Workers;
 use Mojo::Base 'Mojolicious::Controller';
 
 use OpenQA::Utils;
-use OpenQA::ServerSideDataTable;
+use OpenQA::WebAPI::ServerSideDataTable;
 use Scalar::Util 'looks_like_number';
 
 sub _extend_info {
     my ($w, $live) = @_;
     $live //= 0;
     my $info = $w->info($live);
-    $info->{name}      = $w->name;
-    $info->{t_updated} = $w->t_updated;
+    $info->{name} = $w->name;
+    my $error = $info->{error};
+    if ($live && $error && ($error =~ qr/(graceful disconnect) at (.*)/)) {
+        $info->{offline_note} = $1;
+        $info->{t_seen}       = $2 . 'Z';
+    }
+    elsif (my $last_seen = $w->t_seen) {
+        $info->{t_seen} = $last_seen->datetime . 'Z';
+    }
+    else {
+        $info->{t_seen} = 'never';
+    }
     return $info;
 }
 
 sub index {
     my ($self) = @_;
 
-    my $workers_db          = $self->db->resultset('Workers');
+    my $workers_db          = $self->schema->resultset('Workers');
     my $total_online        = grep { !$_->dead } $workers_db->all();
     my $total               = $workers_db->count;
     my $free_active_workers = grep { !$_->dead } $workers_db->search({job_id => undef, error => undef})->all();
@@ -47,12 +56,17 @@ sub index {
         next unless $w->id;
         $workers{$w->name} = _extend_info($w);
     }
+
+    my $is_admin = 0;
+    $is_admin = 1 if ($self->is_admin);
+
     $self->stash(
         workers_online      => $total_online,
         total               => $total,
         workers_active_free => $free_active_workers,
         workers_broken_free => $free_broken_workers,
         workers_busy        => $busy_workers,
+        is_admin            => $is_admin,
         workers             => \%workers
     );
 
@@ -64,7 +78,7 @@ sub index {
 sub show {
     my ($self) = @_;
 
-    my $w = $self->db->resultset('Workers')->find($self->param('worker_id'))
+    my $w = $self->schema->resultset('Workers')->find($self->param('worker_id'))
       or return $self->reply->not_found;
     $self->stash(worker => _extend_info($w, 1));
 
@@ -74,7 +88,7 @@ sub show {
 sub previous_jobs_ajax {
     my ($self) = @_;
 
-    OpenQA::ServerSideDataTable::render_response(
+    OpenQA::WebAPI::ServerSideDataTable::render_response(
         controller => $self,
         resultset  => 'Jobs',
         columns    => [
@@ -110,4 +124,3 @@ sub previous_jobs_ajax {
 }
 
 1;
-# vim: set sw=4 et:

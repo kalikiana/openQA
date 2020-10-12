@@ -1,18 +1,17 @@
 #!BuildTag: openqa_dev
-FROM opensuse:42.3
+FROM opensuse/leap:15.1
 
 # Define environment variable
 ENV NAME openQA test environment
 ENV LANG en_US.UTF-8
 
-RUN zypper ar -f -G "http://download.opensuse.org/repositories/devel:/openQA:/Leap:/42.3/openSUSE_Leap_42.3" devel_openqa
+RUN zypper ar -f -G 'http://download.opensuse.org/repositories/devel:/openQA:/Leap:/15.1/openSUSE_Leap_15.1' devel_openqa
 
 RUN zypper in -y -C \
        glibc-i18ndata \
        glibc-locale \
        automake \
        curl \
-       dbus-1-devel \
        fftw3-devel \
        gcc \
        gcc-c++ \
@@ -35,6 +34,9 @@ RUN zypper in -y -C \
        qemu-kvm \
        tar \
        optipng \
+       python3-base \
+       python3-requests \
+       python3-future \
        sqlite3 \
        postgresql-server \
        which \
@@ -42,6 +44,9 @@ RUN zypper in -y -C \
        xorg-x11-fonts \
        'rubygem(sass)' \
        perl \
+       ShellCheck \
+       python3-setuptools \
+       python3-yamllint \
        sudo \
        'perl(App::cpanminus)' \
        'perl(Archive::Extract)' \
@@ -74,14 +79,16 @@ RUN zypper in -y -C \
        'perl(Exception::Class)' \
        'perl(File::Copy::Recursive)' \
        'perl(File::Touch)' \
+       'perl(IO::Scalar)' \
        'perl(IO::Socket::SSL)' \
        'perl(IPC::Run)' \
        'perl(IPC::System::Simple)' \
        'perl(JSON::XS)' \
        'perl(JavaScript::Minifier::XS)' \
        'perl(LWP::Protocol::https)' \
-       'perl(Minion)' \
+       'perl(Minion) >= 10.0' \
        'perl(Module::CPANfile)' \
+       'perl(Module::Pluggable)' \
        'perl(Mojo::IOLoop::ReadWriteProcess)' \
        'perl(Mojo::Pg)' \
        'perl(Mojo::RabbitMQ::Client)' \
@@ -90,7 +97,9 @@ RUN zypper in -y -C \
        'perl(Mojolicious)' \
        'perl(Mojolicious::Plugin::AssetPack)' \
        'perl(Mojolicious::Plugin::RenderFile)' \
-       'perl(Net::DBus)' \
+       'perl(JSON::Validator)' \
+       'perl(YAML::PP) >= 0.020' \
+       'perl(YAML::XS) >= 0.67' \
        'perl(Net::OpenID::Consumer)' \
        'perl(Net::SNMP)' \
        'perl(Net::SSH2)' \
@@ -99,12 +108,14 @@ RUN zypper in -y -C \
        'perl(Perl::Tidy)' \
        'perl(Pod::POM)' \
        'perl(Pod::Coverage)' \
+       'perl(Pod::Spell)' \
        'perl(SQL::SplitStatement)' \
        'perl(SQL::Translator)' \
        'perl(Selenium::Remote::Driver)' \
        'perl(Socket::MsgHdr)' \
        'perl(Sort::Versions)' \
        'perl(Test::Compile)' \
+       'perl(Test::Strict)' \
        'perl(Test::Fatal)' \
        'perl(Test::Pod)' \
        'perl(Test::Mock::Time)' \
@@ -112,20 +123,20 @@ RUN zypper in -y -C \
        'perl(Test::MockObject)' \
        'perl(Test::Output)' \
        'perl(Socket::MsgHdr)' \
-       'perl(Test::Warnings)' \
-       'perl(Text::Markdown)' \
+       'perl(Test::Warnings) >= 0.029' \
+       'perl(Text::Diff)' \
+       'perl(CommonMark)' \
        'perl(Time::ParseDate)' \
        'perl(XSLoader) >= 0.24' \
        'perl(XML::SemanticDiff)' \
-       'TimeDate' \
        perl-Archive-Extract \
        perl-Test-Simple \
        'perl(aliased)' \
-       dbus-1 systemd-sysvinit \
-	systemd libudev1 tack
+       aspell-spell \
+       aspell-en \
+       systemd-sysvinit \
+       systemd libudev1 tack
 
-RUN cp /usr/lib/systemd/system/dbus.service /etc/systemd/system/; \
-    sed -i 's/OOMScoreAdjust=-900//' /etc/systemd/system/dbus.service
 VOLUME ["/sys/fs/cgroup", "/run"]
 
 CMD ["/sbin/init"]

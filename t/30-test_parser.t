@@ -1,5 +1,5 @@
-#!/usr/bin/env perl -w
-# Copyright (C) 2017 SUSE LLC
+#!/usr/bin/env perl
+# Copyright (C) 2017-2020 SUSE LLC
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -14,11 +14,11 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, see <http://www.gnu.org/licenses/>.
 
-use strict;
-use warnings;
+use Test::Most;
+
 use FindBin;
 use lib ("$FindBin::Bin/lib", "../lib", "lib");
-use Test::More;
+use OpenQA::Test::TimeLimit '10';
 use OpenQA;
 use Test::Output 'combined_like';
 use OpenQA::Parser qw(parser p);
@@ -28,7 +28,6 @@ use OpenQA::Parser::Format::XUnit;
 use OpenQA::Parser::Format::TAP;
 use OpenQA::Parser::Format::IPA;
 use Mojo::File qw(path tempdir);
-use Data::Dumper;
 use Mojo::JSON qw(decode_json encode_json);
 
 subtest 'Result base class object' => sub {
@@ -191,38 +190,55 @@ subtest 'Parser base class object' => sub {
 
     $good_parser->results->add(Dummy->new);
 
-    combined_like sub {
-        $good_parser->_build_tree;
-      }, qr/Serialization is offically supported only if object can be hashified with \-\>to_hash\(\)/,
+    combined_like { $good_parser->_build_tree }
+    qr/Serialization is offically supported only if object can be hashified with \-\>to_hash\(\)/,
       'serialization support warns';
 
     $good_parser->results->remove(0);
 
     $good_parser->results->add(Dummy2->new);
-    combined_like sub {
-        $good_parser->_build_tree;
-      }, qr/Serialization is offically supported only if object can be turned into an array with \-\>to_array\(\)/,
+    combined_like { $good_parser->_build_tree }
+    qr/Serialization is offically supported only if object can be turned into an array with \-\>to_array\(\)/,
       'serialization support warns';
 
-    is_deeply $good_parser->_build_tree->{generated_tests_results}->[0]->{OpenQA::Parser::DATA_FIELD()}, [qw(1 2 3)];
+    combined_like {
+        is_deeply $good_parser->_build_tree->{generated_tests_results}->[0]->{OpenQA::Parser::DATA_FIELD()},
+          [qw(1 2 3)];
+    }
+    qr/Serialization is offically supported only if object can be turned into an array with \-\>to_array\(\)/,
+      'serialization support warns';
 
     $good_parser->results->add({test => 'bar'});
 
     $good_parser->results->add(Dummy3->new);
-    combined_like sub {
-        $good_parser->_build_tree;
-    }, qr/Data type with format not supported for serialization/, 'serialization support warns';
+    combined_like { $good_parser->_build_tree } qr/Data type with format not supported for serialization/,
+      'serialization support warns';
     $good_parser->results->remove(2);
 
     is $good_parser->results->size, 2, '2 results';
-    is_deeply $good_parser->_build_tree->{generated_tests_results}->[1]->{OpenQA::Parser::DATA_FIELD()},
-      {test => 'bar'};
+    combined_like {
+        is_deeply $good_parser->_build_tree->{generated_tests_results}->[1]->{OpenQA::Parser::DATA_FIELD()},
+          {test => 'bar'}
+    }
+    qr/Serialization is offically supported only if object can be turned into an array with \-\>to_array\(\)/,
+      'serialization support warns';
 
-    my $copy = parser("Base")->_load_tree($good_parser->_build_tree);
-    is_deeply $copy->_build_tree->{generated_tests_results}->[0]->{OpenQA::Parser::DATA_FIELD()}, [qw(1 2 3)]
-      or diag explain $copy->_build_tree->{generated_tests_results};
-    is_deeply $copy->_build_tree->{generated_tests_results}->[1]->{OpenQA::Parser::DATA_FIELD()}, {test => 'bar'}
-      or die diag explain $good_parser->_build_tree;
+    my $copy;
+    combined_like { $copy = parser("Base")->_load_tree($good_parser->_build_tree) }
+    qr/Serialization is offically supported only if object can be turned into an array with \-\>to_array\(\)/,
+      'serialization support warns';
+    combined_like {
+        is_deeply $copy->_build_tree->{generated_tests_results}->[0]->{OpenQA::Parser::DATA_FIELD()}, [qw(1 2 3)]
+          or diag explain $copy->_build_tree->{generated_tests_results}
+    }
+    qr/Serialization is offically supported only if object can be turned into an array with \-\>to_array\(\)/,
+      'serialization support warns';
+    combined_like {
+        is_deeply $copy->_build_tree->{generated_tests_results}->[1]->{OpenQA::Parser::DATA_FIELD()}, {test => 'bar'}
+          or die diag explain $good_parser->_build_tree
+    }
+    qr/Serialization is offically supported only if object can be turned into an array with \-\>to_array\(\)/,
+      'serialization support warns';
 
     $good_parser->results->remove(1);
     $good_parser->results->remove(0);
@@ -260,7 +276,7 @@ subtest 'Nested results' => sub {
 
     is_deeply(NestedResult->deserialize($r->serialize()), $r);
 
-    is_deeply $r->_gen_tree_el,
+    is_deeply $r->gen_tree_el,
       {
         '__data__' => {
             'result1' => {
@@ -278,8 +294,8 @@ subtest 'Nested results' => sub {
         },
         '__type__' => 'NestedResult'
       },
-      '_gen_tree_el is working correctly'
-      or die diag explain $r->_gen_tree_el;
+      'gen_tree_el is working correctly'
+      or die diag explain $r->gen_tree_el;
 
     $deep_p->results->add(
         NestedResult->new(
@@ -369,10 +385,15 @@ sub test_junit_file {
       'Overall 9 testsuites, 166 tests are for systemd';
     is $parser->generated_tests_output->size, 166, "Outputs of systemd tests details matches";
 
-    my $resultsdir = tempdir;
-    $parser->write_output($resultsdir);
-    is $resultsdir->list_tree->size, 166, '166 test outputs were written';
-    $resultsdir->list_tree->each(
+    my $resultsdir             = tempdir;
+    my $reported_size          = $parser->write_output($resultsdir);
+    my $actually_written       = $resultsdir->list_tree;
+    my $actually_written_count = $actually_written->size;
+    my $actually_written_size  = $actually_written->reduce(sub { $a + $b->stat->size }, 0);
+    note "write_output wrote $actually_written_count files ($actually_written_size bytes in total)";
+    is $actually_written_count, 166, '166 test outputs were written';
+    is $reported_size, $actually_written_size, 'reported size matches acutally written size';
+    $actually_written->each(
         sub {
             fail('Output result was written correctly') unless ($_->slurp =~ /# system-out:|# running upstream test/);
         });
@@ -510,7 +531,7 @@ sub test_xunit_file {
 subtest junit_parse => sub {
     my $parser = OpenQA::Parser::Format::JUnit->new;
 
-    my $junit_test_file = path($FindBin::Bin, "data")->child("slenkins_control-junit-results.xml");
+    my $junit_test_file = path($FindBin::Bin, "data")->child("junit-results.xml");
 
     $parser->load($junit_test_file);
     my $expected_test_result = test_junit_file($parser);
@@ -545,7 +566,7 @@ subtest junit_parse => sub {
 
     $parser = OpenQA::Parser::Format::JUnit->new;
 
-    $junit_test_file = path($FindBin::Bin, "data")->child("slenkins_control-junit-results-fail.xml");
+    $junit_test_file = path($FindBin::Bin, "data")->child("junit-results-fail.xml");
 
     $parser->load($junit_test_file);
 
@@ -553,6 +574,15 @@ subtest junit_parse => sub {
     is scalar @{$parser->results->first->details}, 33, '33 test cases details';
     is $_->{result}, 'fail', 'All testcases are failing' for @{$parser->results->first->details};
 
+    $parser = OpenQA::Parser::Format::JUnit->new;
+
+    $junit_test_file = path($FindBin::Bin, "data")->child("junit-results-output-softfail.xml");
+
+    $parser->load($junit_test_file);
+
+    is $parser->results->first->result, 'softfail', 'First testsuite softfails as testcases are softfailing';
+    is scalar @{$parser->results->first->details}, 1, '1 test cases details';
+    is $_->{result}, 'softfail', 'All testcases are softfailing' for @{$parser->results->first->details};
 };
 
 sub test_tap_file {
@@ -564,7 +594,7 @@ sub test_tap_file {
         });
 }
 
-subtest tap_parse => sub {
+subtest tap_parse_ok => sub {
     my $parser = OpenQA::Parser::Format::TAP->new;
 
     my $tap_test_file = path($FindBin::Bin, "data")->child("tap_format_example.tap");
@@ -581,7 +611,34 @@ subtest tap_parse => sub {
     is scalar @{$parser->results->last->details}, 6, '1 test cases details';
 
     is $_->{result}, 'ok', 'All testcases are passing' for @{$parser->results->first->details};
+};
 
+subtest tap_parse_fail => sub {
+    # test other suffix and failing test
+    my $tap_test_file = path($FindBin::Bin, "data")->child("tap_format_example2.tap");
+
+    my $parser = OpenQA::Parser::Format::TAP->new;
+    $parser->load($tap_test_file);
+
+    is $parser->results->size, 1, "One test file";
+    is $parser->results->first->result, 'fail', 'tests failed';
+
+    is scalar @{$parser->results->first->details}, 2, '2 test cases details';
+
+    is $parser->results->first->details->[0]->{result}, 'ok',   'Test 1 passed';
+    is $parser->results->first->details->[1]->{result}, 'fail', 'Test 2 failed';
+};
+
+subtest tap_parse_invalid => sub {
+    # test invalid TAP
+    my $tap_test_file = path($FindBin::Bin, "data")->child("tap_format_example3.tap");
+
+    my $parser = OpenQA::Parser::Format::TAP->new;
+
+    eval { $parser->load($tap_test_file) };
+    my $error = $@;
+
+    like $error, qr{A valid TAP starts with filename.tap}, "Invalid TAP example";
 };
 
 sub test_ltp_file {
@@ -607,18 +664,19 @@ sub test_ltp_file {
 sub test_ipa_file {
     my $p = shift;
     my %names;
-    is $p->results->size, 16, 'Expected 16 results' or die diag explain $p->results;
-    is $p->tests->size,   16, 'Expected 16 tests'   or die diag explain $p->results;
+    is $p->results->size, 18, 'Expected 18 results' or die diag explain $p->results;
+    is $p->tests->size,   18, 'Expected 18 tests'   or die diag explain $p->results;
 
     $p->results->each(
         sub {
             ok !exists($names{$_->name}), 'Test name ' . $_->name;
             $names{$_->name} = 1;
             is $_->details->[0]->{_source}, 'parser';
-            if ($_->name =~ /test_sles_repos|test_sles_guestregister|test_sles_smt_reg/) {
+            if ($_->name =~ /^test_sles_repos|test_sles_guestregister|test_sles_smt_reg|EC2_test_sles_ec2_network_01$/)
+            {
                 is $_->result, 'fail' or die;
             }
-            elsif ($_->name =~ /test_sles_ec2_network/) {
+            elsif ($_->name =~ /^EC2_test_sles_ec2_network$/) {
                 is $_->result, 'skip' or die;
             }
             else {
@@ -669,9 +727,8 @@ subtest ltp_parse => sub {
 
 sub serialize_test {
     my ($parser_name, $file, $test_function) = @_;
-    diag "Serialization test for $parser_name and $file with test $test_function";
-    {
-        no strict 'refs';    ## no critic
+
+    subtest "Serialization test for $parser_name and $file with test $test_function" => sub {
         my $test_result_file = path($FindBin::Bin, "data")->child($file);
 
         # With content saved
@@ -737,7 +794,6 @@ sub serialize_test {
         is $deserialized->content, undef, 'Content is not there' or diag explain $deserialized->content;
 
         # Json
-        diag("JSON serialization tests");
         $parser = $parser_name->new();
         $parser->load($test_result_file);
         $obj_content  = $parser->to_json();
@@ -771,16 +827,16 @@ sub serialize_test {
           or diag explain $deserialized->content;
         is $deserialized->content, $test_result_file->slurp, 'Content was kept intact'
           or diag explain $deserialized->content;
-    }
+    };
 }
 
 subtest 'serialize/deserialize' => sub {
-    serialize_test("OpenQA::Parser::Format::IPA",   "ipa.json",                           "test_ipa_file");
-    serialize_test("OpenQA::Parser::Format::LTP",   "ltp_test_result_format.json",        "test_ltp_file");
-    serialize_test("OpenQA::Parser::Format::LTP",   "new_ltp_result_array.json",          "test_ltp_file_v2");
-    serialize_test("OpenQA::Parser::Format::JUnit", "slenkins_control-junit-results.xml", "test_junit_file");
-    serialize_test("OpenQA::Parser::Format::XUnit", "xunit_format_example.xml",           "test_xunit_file");
-    serialize_test("OpenQA::Parser::Format::TAP",   "tap_format_example.tap",             "test_tap_file");
+    serialize_test("OpenQA::Parser::Format::IPA",   "ipa.json",                    \&test_ipa_file);
+    serialize_test("OpenQA::Parser::Format::LTP",   "ltp_test_result_format.json", \&test_ltp_file);
+    serialize_test("OpenQA::Parser::Format::LTP",   "new_ltp_result_array.json",   \&test_ltp_file_v2);
+    serialize_test("OpenQA::Parser::Format::JUnit", "junit-results.xml",           \&test_junit_file);
+    serialize_test("OpenQA::Parser::Format::XUnit", "xunit_format_example.xml",    \&test_xunit_file);
+    serialize_test("OpenQA::Parser::Format::TAP",   "tap_format_example.tap",      \&test_tap_file);
 };
 
 subtest 'Unstructured data' => sub {
@@ -867,7 +923,7 @@ subtest functional_interface => sub {
     ok $default->isa('OpenQA::Parser::Format::Base');
 
     # Supports functional interface.
-    my $test_file = path($FindBin::Bin, "data")->child("new_ltp_result_array.json");
+    my $test_file  = path($FindBin::Bin, "data")->child("new_ltp_result_array.json");
     my $parsed_res = p(LTP => $test_file);
 
     is $parsed_res->results->size, 4, 'Expected 4 results';
@@ -921,8 +977,6 @@ subtest nested_parsers => sub {
 };
 
 done_testing;
-
-1;
 
 {
     package OpenQA::Parser::Format::Dummy;
