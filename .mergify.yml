@@ -1,3 +1,4 @@
+ 
 pull_request_rules:
   - name: automatic merge
     conditions:
@@ -16,6 +17,8 @@ pull_request_rules:
     actions:
       merge:
         method: merge
+        strict: smart+fasttrack
+        strict_method: rebase
   - name: automatic merge on special label
     conditions:
       - -label~=^acceptance-tests-needed|not-ready
